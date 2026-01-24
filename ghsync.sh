@@ -153,8 +153,7 @@ cmd_save() {
   
   cd "$REPO_PATH"
   git add .
-  git commit -m "Save $repo_relative_path from $(hostname)" -q
-  git push -q
+  git commit -m "Save $repo_relative_path from $(hostname)" -q 2>/dev/null || true
   
   # Check if already a symlink pointing to our repo
   if [[ -L "$file_path" ]]; then
@@ -168,7 +167,7 @@ cmd_save() {
   # Remove original and create symlink
   rm -f "$file_path"
   ln -s "$repo_file_path" "$file_path"
-  echo "Saved and symlinked: $repo_relative_path"
+  echo "Saved and symlinked: $repo_relative_path (run 'ghsync sync' to push)"
 }
 
 cmd_sync() {
@@ -177,8 +176,34 @@ cmd_sync() {
     exit 1
   fi
   
-  cd "$REPO_PATH" && git pull -q
-  echo "Synced with remote"
+  cd "$REPO_PATH"
+  
+  # Check for local changes
+  local has_changes=false
+  if [[ -n $(git status --porcelain) ]]; then
+    has_changes=true
+  fi
+  
+  # Check if ahead of remote
+  git fetch -q 2>/dev/null || true
+  local ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+  local behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
+  
+  # Pull first (rebase to keep local commits on top)
+  if [[ "$behind" -gt 0 ]]; then
+    git pull --rebase -q
+    echo "Pulled $behind commit(s) from remote"
+  fi
+  
+  # Push if we have commits ahead
+  if [[ "$ahead" -gt 0 ]]; then
+    git push -q
+    echo "Pushed $ahead commit(s) to remote"
+  fi
+  
+  if [[ "$ahead" -eq 0 ]] && [[ "$behind" -eq 0 ]]; then
+    echo "Already up to date"
+  fi
 }
 
 cmd_restore() {
@@ -286,13 +311,12 @@ cmd_remove() {
   # Remove from manifest
   remove_from_manifest "$repo_relative_path"
   
-  # Commit and push
+  # Commit changes
   cd "$REPO_PATH"
   git add .
-  git commit -m "Remove $repo_relative_path from $(hostname)" -q
-  git push -q
+  git commit -m "Remove $repo_relative_path from $(hostname)" -q 2>/dev/null || true
   
-  echo "Removed: $repo_relative_path (file restored)"
+  echo "Removed: $repo_relative_path (run 'ghsync sync' to push)"
 }
 
 case "$1" in
@@ -324,12 +348,13 @@ case "$1" in
     echo "  init <repo-url> [token]  Initialize with a GitHub repo (token optional for SSH)"
     echo "  save <file-path>         Save file to repo and create symlink"
     echo "  remove <file-path>       Stop tracking file and restore original"
-    echo "  sync                     Pull updates from remote"
-    echo "  restore                  Restore all files from repo (new machine)"
+    echo "  sync                     Push local changes and pull remote updates"
+    echo "  restore                  Restore all symlinks from repo (new machine)"
     echo "  list                     List tracked files"
     echo ""
     echo "Examples:"
     echo "  ghsync init git@github.com:user/dotfiles.git"
-    echo "  ghsync init https://github.com/user/dotfiles TOKEN"
+    echo "  ghsync save ~/.bashrc"
+    echo "  ghsync sync"
     ;;
 esac

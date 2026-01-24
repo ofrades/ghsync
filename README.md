@@ -1,25 +1,6 @@
 # ghsync - GitHub File Sync
 
-Bidirectional file synchronization across machines using Git and symlinks. Like GNU Stow but two-way.
-
-## Features
-
-- **Save files once, access everywhere**: Save any file to a private GitHub repo
-- **Automatic symlinks**: Preserves original file locations via symlinks
-- **Directory structure preserved**: Files maintain their full path (`~/.config/nvim/init.vim`)
-- **Bidirectional sync**: Edit on any machine, changes sync through Git
-- **Zero installation**: Pure bash, only requires git
-- **Single source of truth**: Your repo becomes the canonical location for all tracked files
-
-## How It Works
-
-1. You save a file (e.g., `~/.bashrc`)
-2. Script copies it to `~/.ghsync/repo/~/.bashrc` (preserving path)
-3. Commits and pushes to GitHub
-4. Replaces original with symlink pointing to repo version
-5. On other machines, `restore` creates the same symlinks
-6. All machines edit the same file through symlinks
-7. Just commit/push from `~/.ghsync/repo` to sync changes
+Bidirectional file synchronization across machines using Git and symlinks.
 
 ## Installation
 
@@ -27,107 +8,91 @@ Bidirectional file synchronization across machines using Git and symlinks. Like 
 curl -fsSL https://raw.githubusercontent.com/ofrades/ghsync/main/install.sh | bash
 ```
 
-## Setup
-
-### First Time (Create GitHub repo first)
+## Quick Start
 
 ```bash
-# Create a private repo on GitHub: https://github.com/new
+# Initialize with your repo (SSH recommended)
+ghsync init git@github.com:user/dotfiles.git
 
-# Initialize with SSH (recommended)
-ghsync init git@github.com:yourusername/dotfiles.git
+# Save files you want to sync
+ghsync save ~/.bashrc
+ghsync save ~/.config/nvim/init.vim
 
-# Or with HTTPS + token
-# Get a token with 'repo' scope: https://github.com/settings/tokens
-ghsync init https://github.com/yourusername/dotfiles YOUR_GITHUB_TOKEN
+# Push changes to remote
+ghsync sync
 ```
 
 ## Commands
 
-### `ghsync save <file-path>`
+| Command | Description |
+|---------|-------------|
+| `ghsync init <repo> [token]` | Initialize with a GitHub repo (token optional for SSH) |
+| `ghsync save <file>` | Save file to repo and create symlink |
+| `ghsync remove <file>` | Stop tracking file and restore original |
+| `ghsync sync` | Push local changes and pull remote updates |
+| `ghsync restore` | Restore all symlinks from repo (for new machines) |
+| `ghsync list` | List all tracked files |
 
-Save a file to the repo and create a symlink.
+## How It Works
 
-```bash
-ghsync save ~/.bashrc
-ghsync save ~/.config/nvim/init.vim
-ghsync save ~/Documents/notes.txt
-```
+1. `save` copies file to `~/.ghsync/repo/`, commits locally, replaces original with symlink
+2. `sync` pushes your commits and pulls remote changes
+3. `restore` creates symlinks for all tracked files on a new machine
+4. `remove` restores the original file and stops tracking
 
-The file is copied to the repo, committed, pushed, then replaced with a symlink.
+## Setup
 
-### `ghsync sync`
-
-Pull latest changes from GitHub.
-
-```bash
-ghsync sync
-```
-
-Since your files are symlinks to the repo, pulling updates immediately reflects in all tracked files.
-
-### `ghsync restore`
-
-Set up all symlinks on a new machine.
+### Initialize with SSH (recommended)
 
 ```bash
-ghsync init git@github.com:yourusername/dotfiles.git
-ghsync restore
+ghsync init git@github.com:user/dotfiles.git
 ```
 
-This creates symlinks for all tracked files at their original locations.
-
-### `ghsync list`
-
-Show all tracked files.
+### Initialize with HTTPS + token
 
 ```bash
-ghsync list
+ghsync init https://github.com/user/dotfiles YOUR_TOKEN
 ```
+
+Get a token with 'repo' scope at https://github.com/settings/tokens
 
 ## Typical Workflow
 
-**On Machine 1:**
+**Machine 1 (first time):**
 
 ```bash
-# First time
 ghsync init git@github.com:user/dotfiles.git
 ghsync save ~/.bashrc
 ghsync save ~/.vimrc
-
-# Edit ~/.bashrc (you're editing the repo copy through symlink)
-vim ~/.bashrc
-
-# Commit and push
-cd ~/.ghsync/repo
-git add -A
-git commit -m "update bashrc"
-git push
+ghsync sync
 ```
 
-**On Machine 2:**
+**Machine 2 (setup):**
 
 ```bash
-# First time setup
 ghsync init git@github.com:user/dotfiles.git
 ghsync restore
+```
 
-# Later, get updates
+**Daily use (any machine):**
+
+```bash
+# Edit files normally (they're symlinks to the repo)
+vim ~/.bashrc
+
+# Sync changes
 ghsync sync
-
-# Your ~/.bashrc now has Machine 1's changes
 ```
 
 ## File Structure
 
 ```
 ~/.ghsync/
-├── config              # Stores repo URL and token
-└── repo/               # Git clone of your private repo
-    ├── manifest.json   # Tracks which files are synced
-    └── ~/              # Your files, preserving full paths
+├── config              # Repo URL and token
+└── repo/               # Git clone
+    ├── manifest.json   # Tracked files list
+    └── ~/
         ├── .bashrc
-        ├── .vimrc
         └── .config/
             └── nvim/
                 └── init.vim
@@ -137,12 +102,10 @@ ghsync sync
 
 - `bash`
 - `git`
-- Optional: `jq` (for prettier manifest handling, but not required)
+- Optional: `jq` (for better manifest handling)
 
 ## Notes
 
-- Your GitHub token is stored in `~/.ghsync/config` - keep it secure
-- Files are replaced with symlinks after saving
-- The repo becomes the single source of truth
-- Manual git operations in `~/.ghsync/repo` work normally
-- To stop tracking a file, just delete it from the repo and remove the symlink
+- Token stored in `~/.ghsync/config` - keep it secure (use SSH to avoid tokens)
+- Files become symlinks pointing to the repo
+- Use `ghsync remove <file>` to stop tracking and restore the original file
