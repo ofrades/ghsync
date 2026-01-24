@@ -27,13 +27,6 @@ Bidirectional file synchronization across machines using Git and symlinks. Like 
 curl -fsSL https://raw.githubusercontent.com/ofrades/ghsync/main/install.sh | bash
 ```
 
-Or manually:
-
-```bash
-curl -o ~/.local/bin/ghsync https://raw.githubusercontent.com/ofrades/ghsync/main/ghsync.sh
-chmod +x ~/.local/bin/ghsync
-```
-
 ## Setup
 
 ### First Time (Create GitHub repo first)
