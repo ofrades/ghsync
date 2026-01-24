@@ -103,6 +103,14 @@ ghsync sync
 - `git`
 - Optional: `jq` (for better manifest handling)
 
+## Testing
+
+Run the automated command coverage suite:
+
+```bash
+bash tests/ghsync_tests.sh
+```
+
 ## Notes
 
 - Token stored in `~/.ghsync/config` - keep it secure (use SSH to avoid tokens)

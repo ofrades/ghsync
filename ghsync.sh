@@ -218,8 +218,6 @@ cmd_sync() {
   if [[ "$behind" -gt 0 ]]; then
     git pull --rebase -q
     echo "Pulled $behind commit(s) from remote"
-    # Restore any new symlinks
-    do_restore
   fi
   
   # Push if we have commits ahead
@@ -227,7 +225,10 @@ cmd_sync() {
     git push -q
     echo "Pushed $ahead commit(s) to remote"
   fi
-  
+
+  # Always ensure symlinks exist locally based on manifest
+  do_restore
+
   if [[ "$ahead" -eq 0 ]] && [[ "$behind" -eq 0 ]]; then
     echo "Already up to date"
   fi
@@ -257,11 +258,12 @@ restore_item() {
   
   if [[ -e "$target_path" ]]; then
     if [[ -L "$target_path" ]]; then
-      # Already a symlink, skip silently
-      return
+      local link_target=$(readlink "$target_path")
+      if [[ "$link_target" == "$repo_file_path" ]] || [[ "$link_target" == *".ghsync/repo/"* ]]; then
+        return
+      fi
     fi
-    # Exists but not a symlink, skip
-    return
+    rm -rf "$target_path"
   fi
   
   ln -s "$repo_file_path" "$target_path"
