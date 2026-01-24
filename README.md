@@ -1,6 +1,6 @@
 # ghsync - GitHub File Sync
 
-Bidirectional file synchronization across machines using Git and symlinks.
+Bidirectional file and directory synchronization across machines using Git and symlinks.
 
 ## Installation
 
@@ -14,9 +14,9 @@ curl -fsSL https://raw.githubusercontent.com/ofrades/ghsync/main/install.sh | ba
 # Initialize with your repo (SSH recommended)
 ghsync init git@github.com:user/dotfiles.git
 
-# Save files you want to sync
+# Save files or directories you want to sync
 ghsync save ~/.bashrc
-ghsync save ~/.config/nvim/init.vim
+ghsync save ~/.config/nvim
 
 # Push changes to remote
 ghsync sync
@@ -26,19 +26,19 @@ ghsync sync
 
 | Command | Description |
 |---------|-------------|
-| `ghsync init <repo> [token]` | Initialize with a GitHub repo (token optional for SSH) |
-| `ghsync save <file>` | Save file to repo and create symlink |
-| `ghsync remove <file>` | Stop tracking file and restore original |
-| `ghsync sync` | Push local changes and pull remote updates |
-| `ghsync restore` | Restore all symlinks from repo (for new machines) |
-| `ghsync list` | List all tracked files |
+| `ghsync init <repo> [token]` | Initialize and restore symlinks (token optional for SSH) |
+| `ghsync save <path>` | Save file or directory to repo and create symlink |
+| `ghsync remove <path>` | Stop tracking and restore original |
+| `ghsync sync` | Push/pull changes and restore new symlinks |
+| `ghsync restore` | Manually restore all symlinks |
+| `ghsync list` | List all tracked files and directories |
 
 ## How It Works
 
-1. `save` copies file to `~/.ghsync/repo/`, commits locally, replaces original with symlink
-2. `sync` pushes your commits and pulls remote changes
-3. `restore` creates symlinks for all tracked files on a new machine
-4. `remove` restores the original file and stops tracking
+1. `save` copies file/directory to `~/.ghsync/repo/`, commits locally, replaces original with symlink
+2. `sync` pushes your commits, pulls remote changes, and restores any new symlinks
+3. `init` clones the repo and automatically restores all symlinks
+4. `remove` restores the original file/directory and stops tracking
 
 ## Setup
 
@@ -63,7 +63,7 @@ Get a token with 'repo' scope at https://github.com/settings/tokens
 ```bash
 ghsync init git@github.com:user/dotfiles.git
 ghsync save ~/.bashrc
-ghsync save ~/.vimrc
+ghsync save ~/.config/nvim
 ghsync sync
 ```
 
@@ -71,7 +71,7 @@ ghsync sync
 
 ```bash
 ghsync init git@github.com:user/dotfiles.git
-ghsync restore
+# Symlinks are automatically restored!
 ```
 
 **Daily use (any machine):**
@@ -90,12 +90,11 @@ ghsync sync
 ~/.ghsync/
 ├── config              # Repo URL and token
 └── repo/               # Git clone
-    ├── manifest.json   # Tracked files list
+    ├── manifest.json   # Tracked files/directories list
     └── ~/
         ├── .bashrc
         └── .config/
-            └── nvim/
-                └── init.vim
+            └── nvim/   # Entire directory synced
 ```
 
 ## Requirements
@@ -107,5 +106,5 @@ ghsync sync
 ## Notes
 
 - Token stored in `~/.ghsync/config` - keep it secure (use SSH to avoid tokens)
-- Files become symlinks pointing to the repo
-- Use `ghsync remove <file>` to stop tracking and restore the original file
+- Files and directories become symlinks pointing to the repo
+- Use `ghsync remove <path>` to stop tracking and restore the original

@@ -108,11 +108,14 @@ cmd_init() {
   
   save_config "$repo_url" "$token"
   echo "Repository initialized"
+  
+  # Restore symlinks for all tracked items
+  do_restore
 }
 
 cmd_save() {
   if [[ $# -lt 1 ]]; then
-    echo "Usage: ghsync save <file-path>"
+    echo "Usage: ghsync save <path>"
     exit 1
   fi
   
@@ -123,6 +126,8 @@ cmd_save() {
   
   local file_path="$1"
   file_path="${file_path/#\~/$HOME}"
+  # Remove trailing slash for directories
+  file_path="${file_path%/}"
   
   # Normalize path without resolving symlinks (keep logical path)
   # Use realpath -s if available, otherwise use pwd -L approach
@@ -135,7 +140,7 @@ cmd_save() {
   fi
   
   if [[ ! -e "$file_path" ]]; then
-    echo "File not found: $file_path"
+    echo "Not found: $file_path"
     exit 1
   fi
   
@@ -144,6 +149,26 @@ cmd_save() {
   local repo_relative_path="${file_path/#$HOME/\~}"
   local repo_file_path="$REPO_PATH/$repo_relative_path"
   
+  # Handle directories
+  if [[ -d "$file_path" ]] && [[ ! -L "$file_path" ]]; then
+    mkdir -p "$(dirname "$repo_file_path")"
+    # Copy directory contents (follow symlinks)
+    cp -rL "$file_path" "$repo_file_path"
+    
+    add_to_manifest "$repo_relative_path"
+    
+    cd "$REPO_PATH"
+    git add .
+    git commit -m "Save $repo_relative_path from $(hostname)" -q 2>/dev/null || true
+    
+    # Remove original directory and create symlink
+    rm -rf "$file_path"
+    ln -s "$repo_file_path" "$file_path"
+    echo "Saved and symlinked: $repo_relative_path/ (run 'ghsync sync' to push)"
+    return
+  fi
+  
+  # Handle files
   mkdir -p "$(dirname "$repo_file_path")"
   
   # Copy the actual file content (follow symlinks for cp)
@@ -193,6 +218,8 @@ cmd_sync() {
   if [[ "$behind" -gt 0 ]]; then
     git pull --rebase -q
     echo "Pulled $behind commit(s) from remote"
+    # Restore any new symlinks
+    do_restore
   fi
   
   # Push if we have commits ahead
@@ -213,29 +240,16 @@ cmd_restore() {
   fi
   
   cd "$REPO_PATH" && git pull -q
-  
-  local manifest=$(load_manifest)
-  
-  if command -v jq &> /dev/null; then
-    echo "$manifest" | jq -r 'keys[]' | while read -r repo_relative_path; do
-      restore_file "$repo_relative_path"
-    done
-  else
-    echo "$manifest" | grep -o '"[^"]*"' | sed 's/"//g' | while read -r repo_relative_path; do
-      if [[ "$repo_relative_path" != "$repo_relative_path" ]]; then
-        restore_file "$repo_relative_path"
-      fi
-    done
-  fi
+  do_restore
+  echo "Restore complete"
 }
 
-restore_file() {
+restore_item() {
   local repo_relative_path="$1"
   local target_path="${repo_relative_path/#\~/$HOME}"
   local repo_file_path="$REPO_PATH/$repo_relative_path"
   
-  if [[ ! -f "$repo_file_path" ]]; then
-    echo "Skipping missing: $repo_relative_path"
+  if [[ ! -e "$repo_file_path" ]]; then
     return
   fi
   
@@ -243,15 +257,29 @@ restore_file() {
   
   if [[ -e "$target_path" ]]; then
     if [[ -L "$target_path" ]]; then
-      echo "Already linked: $repo_relative_path"
+      # Already a symlink, skip silently
       return
     fi
-    echo "File exists, skipping: $repo_relative_path"
+    # Exists but not a symlink, skip
     return
   fi
   
   ln -s "$repo_file_path" "$target_path"
   echo "Restored: $repo_relative_path"
+}
+
+do_restore() {
+  local manifest=$(load_manifest)
+  
+  if command -v jq &> /dev/null; then
+    echo "$manifest" | jq -r 'keys[]' | while read -r repo_relative_path; do
+      restore_item "$repo_relative_path"
+    done
+  else
+    echo "$manifest" | grep -o '"[^"]*"' | sed 's/"//g' | while read -r repo_relative_path; do
+      restore_item "$repo_relative_path"
+    done
+  fi
 }
 
 cmd_list() {
@@ -272,7 +300,7 @@ cmd_list() {
 
 cmd_remove() {
   if [[ $# -lt 1 ]]; then
-    echo "Usage: ghsync remove <file-path>"
+    echo "Usage: ghsync remove <path>"
     exit 1
   fi
   
@@ -283,6 +311,8 @@ cmd_remove() {
   
   local file_path="$1"
   file_path="${file_path/#\~/$HOME}"
+  # Remove trailing slash for directories
+  file_path="${file_path%/}"
   
   # Normalize path without resolving symlinks
   if realpath -s / &>/dev/null; then
@@ -295,18 +325,28 @@ cmd_remove() {
   local repo_relative_path="${file_path/#$HOME/\~}"
   local repo_file_path="$REPO_PATH/$repo_relative_path"
   
-  # Check if file exists in repo
-  if [[ ! -f "$repo_file_path" ]]; then
+  # Check if file/directory exists in repo
+  if [[ ! -e "$repo_file_path" ]]; then
     echo "Not tracked: $repo_relative_path"
     exit 1
   fi
   
-  # Copy file from repo back to original location (replacing symlink)
-  rm -f "$file_path"
-  cp "$repo_file_path" "$file_path"
-  
-  # Remove from repo
-  rm -f "$repo_file_path"
+  # Handle directories
+  if [[ -d "$repo_file_path" ]]; then
+    # Remove symlink and copy directory back
+    rm -f "$file_path"
+    cp -r "$repo_file_path" "$file_path"
+    
+    # Remove from repo
+    rm -rf "$repo_file_path"
+  else
+    # Handle files
+    rm -f "$file_path"
+    cp "$repo_file_path" "$file_path"
+    
+    # Remove from repo
+    rm -f "$repo_file_path"
+  fi
   
   # Remove from manifest
   remove_from_manifest "$repo_relative_path"
@@ -345,16 +385,17 @@ case "$1" in
     echo "GitHub File Sync with Symlinks"
     echo ""
     echo "Commands:"
-    echo "  init <repo-url> [token]  Initialize with a GitHub repo (token optional for SSH)"
-    echo "  save <file-path>         Save file to repo and create symlink"
-    echo "  remove <file-path>       Stop tracking file and restore original"
-    echo "  sync                     Push local changes and pull remote updates"
-    echo "  restore                  Restore all symlinks from repo (new machine)"
-    echo "  list                     List tracked files"
+    echo "  init <repo-url> [token]  Initialize and restore symlinks (token optional for SSH)"
+    echo "  save <path>              Save file or directory to repo and create symlink"
+    echo "  remove <path>            Stop tracking and restore original"
+    echo "  sync                     Push/pull changes and restore new symlinks"
+    echo "  restore                  Manually restore all symlinks"
+    echo "  list                     List tracked files and directories"
     echo ""
     echo "Examples:"
     echo "  ghsync init git@github.com:user/dotfiles.git"
     echo "  ghsync save ~/.bashrc"
+    echo "  ghsync save ~/.config/nvim"
     echo "  ghsync sync"
     ;;
 esac
