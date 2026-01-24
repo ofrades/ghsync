@@ -57,6 +57,20 @@ add_to_manifest() {
   save_manifest "$manifest"
 }
 
+remove_from_manifest() {
+  local repo_relative_path="$1"
+  local manifest=$(load_manifest)
+  
+  if command -v jq &> /dev/null; then
+    manifest=$(echo "$manifest" | jq --arg path "$repo_relative_path" 'del(.[$path])')
+  else
+    # Simple sed-based removal (not perfect but works for basic cases)
+    manifest=$(echo "$manifest" | sed "s/\"$repo_relative_path\":\"$repo_relative_path\",\?//g" | sed 's/,}/}/g')
+  fi
+  
+  save_manifest "$manifest"
+}
+
 cmd_init() {
   if [[ $# -lt 1 ]]; then
     echo "Usage: ghsync init <repo-url> [github-token]"
@@ -231,6 +245,56 @@ cmd_list() {
   fi
 }
 
+cmd_remove() {
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: ghsync remove <file-path>"
+    exit 1
+  fi
+  
+  if ! load_config; then
+    echo "Not initialized. Run: ghsync init <repo-url> <token>"
+    exit 1
+  fi
+  
+  local file_path="$1"
+  file_path="${file_path/#\~/$HOME}"
+  
+  # Normalize path without resolving symlinks
+  if realpath -s / &>/dev/null; then
+    file_path=$(realpath -s "$file_path" 2>/dev/null || echo "$file_path")
+  else
+    local dir=$(cd "$(dirname "$file_path")" 2>/dev/null && pwd -L)
+    file_path="$dir/$(basename "$file_path")"
+  fi
+  
+  local repo_relative_path="${file_path/#$HOME/\~}"
+  local repo_file_path="$REPO_PATH/$repo_relative_path"
+  
+  # Check if file exists in repo
+  if [[ ! -f "$repo_file_path" ]]; then
+    echo "Not tracked: $repo_relative_path"
+    exit 1
+  fi
+  
+  # Copy file from repo back to original location (replacing symlink)
+  rm -f "$file_path"
+  cp "$repo_file_path" "$file_path"
+  
+  # Remove from repo
+  rm -f "$repo_file_path"
+  
+  # Remove from manifest
+  remove_from_manifest "$repo_relative_path"
+  
+  # Commit and push
+  cd "$REPO_PATH"
+  git add .
+  git commit -m "Remove $repo_relative_path from $(hostname)" -q
+  git push -q
+  
+  echo "Removed: $repo_relative_path (file restored)"
+}
+
 case "$1" in
   init)
     shift
@@ -246,6 +310,10 @@ case "$1" in
   restore)
     cmd_restore
     ;;
+  remove)
+    shift
+    cmd_remove "$@"
+    ;;
   list)
     cmd_list
     ;;
@@ -255,6 +323,7 @@ case "$1" in
     echo "Commands:"
     echo "  init <repo-url> [token]  Initialize with a GitHub repo (token optional for SSH)"
     echo "  save <file-path>         Save file to repo and create symlink"
+    echo "  remove <file-path>       Stop tracking file and restore original"
     echo "  sync                     Pull updates from remote"
     echo "  restore                  Restore all files from repo (new machine)"
     echo "  list                     List tracked files"
