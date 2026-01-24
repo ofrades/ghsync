@@ -202,25 +202,26 @@ cmd_sync() {
   fi
   
   cd "$REPO_PATH"
-  
-  # Check for local changes
-  local has_changes=false
+
+  # Auto-commit any local changes before syncing
   if [[ -n $(git status --porcelain) ]]; then
-    has_changes=true
+    git add .
+    git commit -m "Sync changes from $(hostname)" -q 2>/dev/null || true
   fi
-  
-  # Check if ahead of remote
+
   git fetch -q 2>/dev/null || true
-  local ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
   local behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
-  
-  # Pull first (rebase to keep local commits on top)
+  local ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+
   if [[ "$behind" -gt 0 ]]; then
     git pull --rebase -q
     echo "Pulled $behind commit(s) from remote"
   fi
-  
-  # Push if we have commits ahead
+
+  # Recompute after any pull
+  behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
+  ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+
   if [[ "$ahead" -gt 0 ]]; then
     git push -q
     echo "Pushed $ahead commit(s) to remote"
@@ -231,6 +232,39 @@ cmd_sync() {
 
   if [[ "$ahead" -eq 0 ]] && [[ "$behind" -eq 0 ]]; then
     echo "Already up to date"
+  fi
+}
+
+cmd_status() {
+  if ! load_config; then
+    echo "Not initialized. Run: ghsync init <repo-url> <token>"
+    exit 1
+  fi
+
+  cd "$REPO_PATH"
+
+  git fetch -q 2>/dev/null || true
+  local behind=$(git rev-list --count HEAD..@{u} 2>/dev/null || echo "0")
+  local ahead=$(git rev-list --count @{u}..HEAD 2>/dev/null || echo "0")
+
+  if [[ "$ahead" -gt 0 ]]; then
+    echo "Needs push: ahead of remote by $ahead commit(s)"
+  fi
+
+  if [[ "$behind" -gt 0 ]]; then
+    echo "Needs pull: behind remote by $behind commit(s)"
+  fi
+
+  if [[ "$ahead" -eq 0 ]] && [[ "$behind" -eq 0 ]]; then
+    echo "Remote in sync"
+  fi
+
+  local short_status=$(git status --porcelain)
+  if [[ -n "$short_status" ]]; then
+    echo "Local changes:"
+    echo "$short_status"
+  else
+    echo "No local changes"
   fi
 }
 
@@ -383,6 +417,9 @@ case "$1" in
   list)
     cmd_list
     ;;
+  status)
+    cmd_status
+    ;;
   *)
     echo "GitHub File Sync with Symlinks"
     echo ""
@@ -393,6 +430,7 @@ case "$1" in
     echo "  sync                     Push/pull changes and restore new symlinks"
     echo "  restore                  Manually restore all symlinks"
     echo "  list                     List tracked files and directories"
+    echo "  status                   Show local changes and remote sync status"
     echo ""
     echo "Examples:"
     echo "  ghsync init git@github.com:user/dotfiles.git"

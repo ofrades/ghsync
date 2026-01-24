@@ -30,6 +30,7 @@ ghsync sync
 | `ghsync save <path>` | Save file or directory to repo and create symlink |
 | `ghsync remove <path>` | Stop tracking and restore original |
 | `ghsync sync` | Push/pull changes and restore new symlinks |
+| `ghsync status` | Show local changes and remote sync status |
 | `ghsync restore` | Manually restore all symlinks |
 | `ghsync list` | List all tracked files and directories |
 
@@ -82,6 +83,9 @@ vim ~/.bashrc
 
 # Sync changes
 ghsync sync
+
+# Check status without syncing
+ghsync status
 ```
 
 ## File Structure
