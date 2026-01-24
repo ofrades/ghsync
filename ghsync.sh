@@ -109,9 +109,18 @@ cmd_save() {
   
   local file_path="$1"
   file_path="${file_path/#\~/$HOME}"
-  file_path=$(realpath "$file_path" 2>/dev/null || echo "$file_path")
   
-  if [[ ! -f "$file_path" ]]; then
+  # Normalize path without resolving symlinks (keep logical path)
+  # Use realpath -s if available, otherwise use pwd -L approach
+  if realpath -s / &>/dev/null; then
+    file_path=$(realpath -s "$file_path" 2>/dev/null || echo "$file_path")
+  else
+    # Fallback: cd to dir and use pwd -L to get logical path
+    local dir=$(cd "$(dirname "$file_path")" 2>/dev/null && pwd -L)
+    file_path="$dir/$(basename "$file_path")"
+  fi
+  
+  if [[ ! -e "$file_path" ]]; then
     echo "File not found: $file_path"
     exit 1
   fi
@@ -122,7 +131,9 @@ cmd_save() {
   local repo_file_path="$REPO_PATH/$repo_relative_path"
   
   mkdir -p "$(dirname "$repo_file_path")"
-  cp "$file_path" "$repo_file_path"
+  
+  # Copy the actual file content (follow symlinks for cp)
+  cp -L "$file_path" "$repo_file_path"
   
   add_to_manifest "$repo_relative_path"
   
@@ -131,13 +142,19 @@ cmd_save() {
   git commit -m "Save $repo_relative_path from $(hostname)" -q
   git push -q
   
+  # Check if already a symlink pointing to our repo
   if [[ -L "$file_path" ]]; then
-    echo "Already symlinked: $repo_relative_path"
-  else
-    rm "$file_path"
-    ln -s "$repo_file_path" "$file_path"
-    echo "Saved and symlinked: $repo_relative_path"
+    local link_target=$(readlink "$file_path")
+    if [[ "$link_target" == "$repo_file_path" ]] || [[ "$link_target" == *".ghsync/repo/"* ]]; then
+      echo "Already symlinked: $repo_relative_path"
+      return
+    fi
   fi
+  
+  # Remove original and create symlink
+  rm -f "$file_path"
+  ln -s "$repo_file_path" "$file_path"
+  echo "Saved and symlinked: $repo_relative_path"
 }
 
 cmd_sync() {
