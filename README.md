@@ -24,17 +24,14 @@ Bidirectional file synchronization across machines using Git and symlinks. Like 
 ## Installation
 
 ```bash
-# Download the script
-curl -o ghsync https://raw.githubusercontent.com/yourusername/ghsync/main/ghsync
-chmod +x ghsync
+curl -fsSL https://raw.githubusercontent.com/ofrades/ghsync/main/install.sh | bash
+```
 
-# Move to PATH
-sudo mv ghsync /usr/local/bin/
+Or manually:
 
-# Or keep it local
-mkdir -p ~/bin
-mv ghsync ~/bin/
-export PATH="$HOME/bin:$PATH"  # Add to ~/.bashrc
+```bash
+curl -o ~/.local/bin/ghsync https://raw.githubusercontent.com/ofrades/ghsync/main/ghsync.sh
+chmod +x ~/.local/bin/ghsync
 ```
 
 ## Setup
@@ -44,10 +41,11 @@ export PATH="$HOME/bin:$PATH"  # Add to ~/.bashrc
 ```bash
 # Create a private repo on GitHub: https://github.com/new
 
-# Get a personal access token with 'repo' scope:
-# https://github.com/settings/tokens
+# Initialize with SSH (recommended)
+ghsync init git@github.com:yourusername/dotfiles.git
 
-# Initialize ghsync
+# Or with HTTPS + token
+# Get a token with 'repo' scope: https://github.com/settings/tokens
 ghsync init https://github.com/yourusername/dotfiles YOUR_GITHUB_TOKEN
 ```
 
@@ -80,7 +78,7 @@ Since your files are symlinks to the repo, pulling updates immediately reflects 
 Set up all symlinks on a new machine.
 
 ```bash
-ghsync init https://github.com/yourusername/dotfiles YOUR_GITHUB_TOKEN
+ghsync init git@github.com:yourusername/dotfiles.git
 ghsync restore
 ```
 
@@ -100,7 +98,7 @@ ghsync list
 
 ```bash
 # First time
-ghsync init https://github.com/user/dotfiles TOKEN
+ghsync init git@github.com:user/dotfiles.git
 ghsync save ~/.bashrc
 ghsync save ~/.vimrc
 
@@ -118,7 +116,7 @@ git push
 
 ```bash
 # First time setup
-ghsync init https://github.com/user/dotfiles TOKEN
+ghsync init git@github.com:user/dotfiles.git
 ghsync restore
 
 # Later, get updates

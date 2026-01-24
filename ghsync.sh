@@ -58,13 +58,17 @@ add_to_manifest() {
 }
 
 cmd_init() {
-  if [[ $# -lt 2 ]]; then
-    echo "Usage: ghsync init <repo-url> <github-token>"
+  if [[ $# -lt 1 ]]; then
+    echo "Usage: ghsync init <repo-url> [github-token]"
+    echo ""
+    echo "Examples:"
+    echo "  ghsync init git@github.com:user/dotfiles.git"
+    echo "  ghsync init https://github.com/user/dotfiles TOKEN"
     exit 1
   fi
   
   local repo_url="$1"
-  local token="$2"
+  local token="${2:-}"
   
   ensure_config_dir
   
@@ -72,9 +76,18 @@ cmd_init() {
     rm -rf "$REPO_PATH"
   fi
   
-  local auth_url="${repo_url/https:\/\//https:\/\/$token@}"
+  local clone_url="$repo_url"
   
-  if ! git clone "$auth_url" "$REPO_PATH" 2>/dev/null; then
+  # Handle different URL formats
+  if [[ "$repo_url" == git@* ]]; then
+    # SSH URL (git@github.com:user/repo.git) - no token needed
+    clone_url="$repo_url"
+  elif [[ "$repo_url" == https://* ]] && [[ -n "$token" ]]; then
+    # HTTPS with token
+    clone_url="${repo_url/https:\/\//https:\/\/$token@}"
+  fi
+  
+  if ! git clone "$clone_url" "$REPO_PATH" 2>/dev/null; then
     echo "Error: Failed to clone repository"
     exit 1
   fi
@@ -223,10 +236,14 @@ case "$1" in
     echo "GitHub File Sync with Symlinks"
     echo ""
     echo "Commands:"
-    echo "  init <repo-url> <token>  Initialize with a GitHub repo"
+    echo "  init <repo-url> [token]  Initialize with a GitHub repo (token optional for SSH)"
     echo "  save <file-path>         Save file to repo and create symlink"
     echo "  sync                     Pull updates from remote"
     echo "  restore                  Restore all files from repo (new machine)"
     echo "  list                     List tracked files"
+    echo ""
+    echo "Examples:"
+    echo "  ghsync init git@github.com:user/dotfiles.git"
+    echo "  ghsync init https://github.com/user/dotfiles TOKEN"
     ;;
 esac
