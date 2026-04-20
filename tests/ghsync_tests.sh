@@ -86,6 +86,21 @@ test_init_accepts_custom_repo_subdir() {
   grep -q 'REPO_SUBDIR="dotfiles"' "$HOME/.ghsync/config" || fail "config missing custom repo subdir"
 }
 
+test_init_failure_preserves_existing_repo() {
+  setup_seed_repo
+  ghsync init "$REMOTE_REPO" >/dev/null
+  configure_repo_user
+
+  echo ok > "$HOME/.ghsync/repo/.keep"
+
+  if ghsync init "$TMP_ROOT/missing-remote.git" >/dev/null 2>&1; then
+    fail "init unexpectedly succeeded with missing remote"
+  fi
+
+  [[ -d "$HOME/.ghsync/repo/.git" ]] || fail "existing repo removed after failed init"
+  [[ -f "$HOME/.ghsync/repo/.keep" ]] || fail "existing repo contents lost after failed init"
+}
+
 test_save_creates_symlink_and_manifest_entry() {
   setup_seed_repo
   ghsync init "$REMOTE_REPO" >/dev/null
@@ -250,6 +265,7 @@ test_list_outputs_tracked_files() {
 main() {
   run_test test_init_creates_repo_and_config
   run_test test_init_accepts_custom_repo_subdir
+  run_test test_init_failure_preserves_existing_repo
   run_test test_save_creates_symlink_and_manifest_entry
   run_test test_save_with_custom_repo_subdir_uses_existing_layout
   run_test test_sync_restores_new_remote_symlink

@@ -335,11 +335,11 @@ cmd_init() {
 
   ensure_config_dir
 
-  if [[ -d "$REPO_PATH" ]]; then
-    rm -rf "$REPO_PATH"
-  fi
-
   local clone_url="$repo_url"
+  local temp_repo_path="$CONFIG_DIR/repo.tmp.$$"
+  local backup_repo_path="$CONFIG_DIR/repo.backup.$$"
+
+  rm -rf "$temp_repo_path" "$backup_repo_path"
 
   # Handle different URL formats
   if [[ "$repo_url" == git@* ]]; then
@@ -350,10 +350,26 @@ cmd_init() {
     clone_url="${repo_url/https:\/\//https:\/\/$token@}"
   fi
 
-  if ! git clone "$clone_url" "$REPO_PATH" 2>/dev/null; then
+  if ! git clone "$clone_url" "$temp_repo_path" 2>/dev/null; then
+    rm -rf "$temp_repo_path"
     echo "Error: Failed to clone repository"
     exit 1
   fi
+
+  if [[ -d "$REPO_PATH" ]]; then
+    mv "$REPO_PATH" "$backup_repo_path"
+  fi
+
+  if ! mv "$temp_repo_path" "$REPO_PATH"; then
+    rm -rf "$temp_repo_path"
+    if [[ -d "$backup_repo_path" ]]; then
+      mv "$backup_repo_path" "$REPO_PATH"
+    fi
+    echo "Error: Failed to activate cloned repository"
+    exit 1
+  fi
+
+  rm -rf "$backup_repo_path"
 
   save_config "$repo_url" "$token" "$repo_subdir"
   echo "Repository initialized"
