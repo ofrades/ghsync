@@ -15,6 +15,9 @@ curl -fsSL https://raw.githubusercontent.com/ofrades/ghsync/main/install.sh | ba
 # Default layout stores files directly at the repo root
 ghsync init git@github.com:user/dotfiles.git
 
+# Or point ghsync at an existing local checkout
+ghsync init --repo-dir ~/code/dotfiles
+
 # Or map your home folder into a subdirectory inside the repo
 ghsync init git@github.com:user/dotfiles.git dotfiles
 
@@ -30,7 +33,7 @@ ghsync sync
 
 | Command | Description |
 |---------|-------------|
-| `ghsync init <repo> [token] [repo-subdir]` | Initialize and restore symlinks. `repo-subdir` is the directory in the repo that maps to `$HOME`; default is `.` for repo root. |
+| `ghsync init <repo> [token] [repo-subdir] [--repo-dir <dir>]` | Initialize and restore symlinks. `repo-subdir` maps the repo to `$HOME`; `--repo-dir` uses an existing local checkout instead of `~/.ghsync/repo`. |
 | `ghsync save <path>` | Save file or directory to repo and create symlink |
 | `ghsync remove <path>` | Stop tracking and restore original |
 | `ghsync sync` | Push/pull changes and restore new symlinks |
@@ -42,7 +45,7 @@ ghsync sync
 
 1. `save` copies a file/directory into your configured repo subdir and replaces the original with a symlink
 2. `sync` pushes your commits, pulls remote changes, and restores any new symlinks
-3. `init` clones the repo and automatically restores all symlinks
+3. `init` either clones the repo or attaches to an existing local checkout, then restores all symlinks
 4. `remove` restores the original file/directory and stops tracking
 
 ## Setup
@@ -59,6 +62,14 @@ If your repo already has dotfiles at the root, the default is enough:
 
 ```bash
 ghsync init git@github.com:user/dotfiles.git
+```
+
+If you already have the repo checked out locally and want symlinks to point there directly:
+
+```bash
+ghsync init --repo-dir ~/code/dotfiles
+# or explicitly keep the remote url in config
+ghsync init git@github.com:user/dotfiles.git --repo-dir ~/code/dotfiles
 ```
 
 If your dotfiles live in a subdirectory like `dotfiles/`:
@@ -96,7 +107,7 @@ Get a token with 'repo' scope at https://github.com/settings/tokens
 **Machine 1 (first time):**
 
 ```bash
-ghsync init git@github.com:user/dotfiles.git
+ghsync init git@github.com:user/dotfiles.git --repo-dir ~/code/dotfiles
 ghsync save ~/.bashrc
 ghsync save ~/.config/nvim
 ghsync sync
@@ -128,25 +139,33 @@ Default layout:
 
 ```text
 ~/.ghsync/
-├── config              # Repo URL, token, and repo subdir
-└── repo/               # Git clone
+├── config              # Repo URL, token, repo subdir, and repo dir
+└── repo/               # Git clone (default when --repo-dir is not used)
     ├── manifest.json   # Tracked files/directories list
     ├── .bashrc
     └── .config/
         └── nvim/
 ```
 
+If you initialize with `--repo-dir ~/code/dotfiles`, symlinks point straight into that checkout instead:
+
+```text
+~/code/dotfiles/
+├── manifest.json
+├── .bashrc
+└── .config/
+    └── nvim/
+```
+
 If you initialize with a custom repo subdir like `dotfiles`, files are stored there instead:
 
 ```text
-~/.ghsync/
-├── config
-└── repo/
-    ├── manifest.json
-    └── dotfiles/
-        ├── .bashrc
-        └── .config/
-            └── nvim/
+~/.ghsync/repo/
+├── manifest.json
+└── dotfiles/
+    ├── .bashrc
+    └── .config/
+        └── nvim/
 ```
 
 Legacy repos with a literal `~/` folder are still supported for compatibility, but new setups no longer need that extra directory.

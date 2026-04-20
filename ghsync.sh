@@ -2,7 +2,8 @@
 
 CONFIG_DIR="$HOME/.ghsync"
 CONFIG_FILE="$CONFIG_DIR/config"
-REPO_PATH="$CONFIG_DIR/repo"
+DEFAULT_REPO_PATH="$CONFIG_DIR/repo"
+REPO_PATH="$DEFAULT_REPO_PATH"
 MANIFEST_FILE="manifest.json"
 
 ensure_config_dir() {
@@ -14,6 +15,35 @@ escape_config_value() {
   value="${value//\\/\\\\}"
   value="${value//\"/\\\"}"
   printf '%s' "$value"
+}
+
+normalize_repo_dir() {
+  local repo_dir="${1:-$DEFAULT_REPO_PATH}"
+
+  repo_dir="${repo_dir/#\~/$HOME}"
+  repo_dir="${repo_dir%/}"
+
+  if [[ -z "$repo_dir" ]]; then
+    repo_dir="$DEFAULT_REPO_PATH"
+  fi
+
+  if [[ "$repo_dir" != /* ]]; then
+    repo_dir="$PWD/$repo_dir"
+  fi
+
+  if command -v python3 &> /dev/null; then
+    REPO_DIR_INPUT="$repo_dir" python3 - <<'PY'
+import os
+print(os.path.abspath(os.environ["REPO_DIR_INPUT"]))
+PY
+  else
+    printf '%s\n' "$repo_dir"
+  fi
+}
+
+is_git_repo() {
+  local repo_dir="$1"
+  git -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1
 }
 
 detect_repo_subdir() {
@@ -47,10 +77,13 @@ load_config() {
   REPO_URL=$(sed -n 's/^REPO_URL="\([^"]*\)"$/\1/p' "$CONFIG_FILE")
   GH_TOKEN=$(sed -n 's/^GH_TOKEN="\([^"]*\)"$/\1/p' "$CONFIG_FILE")
   REPO_SUBDIR=$(sed -n 's/^REPO_SUBDIR="\([^"]*\)"$/\1/p' "$CONFIG_FILE")
+  REPO_DIR=$(sed -n 's/^REPO_DIR="\([^"]*\)"$/\1/p' "$CONFIG_FILE")
 
   if [[ -z "$REPO_URL" ]]; then
     return 1
   fi
+
+  REPO_PATH=$(normalize_repo_dir "${REPO_DIR:-$DEFAULT_REPO_PATH}")
 
   if [[ -z "$REPO_SUBDIR" ]]; then
     REPO_SUBDIR=$(detect_repo_subdir)
@@ -63,21 +96,25 @@ save_config() {
   local repo_url="$1"
   local token="$2"
   local repo_subdir="$3"
+  local repo_dir="$4"
   ensure_config_dir
   cat > "$CONFIG_FILE" << EOF
 REPO_URL="$(escape_config_value "$repo_url")"
 GH_TOKEN="$(escape_config_value "$token")"
 REPO_SUBDIR="$(escape_config_value "$repo_subdir")"
+REPO_DIR="$(escape_config_value "$repo_dir")"
 EOF
 }
 
 print_init_usage() {
-  echo "Usage: ghsync init <repo-url> [github-token] [repo-subdir]"
-  echo "       ghsync init <repo-url> --repo-subdir <repo-subdir> [github-token]"
+  echo "Usage: ghsync init <repo-url> [github-token] [repo-subdir] [--repo-dir <dir>]"
+  echo "       ghsync init [--repo-dir <dir>] <repo-url> [github-token] [repo-subdir]"
+  echo "       ghsync init --repo-dir <existing-dir>"
   echo ""
   echo "repo-subdir is the directory inside the repo that maps to your home folder."
   echo "Default is '.' so files are stored directly in the repo root."
   echo "Use '~' only for legacy repos that already have a literal ~/ directory."
+  echo "--repo-dir points ghsync at an existing local checkout instead of ~/.ghsync/repo."
 }
 
 print_not_initialized() {
@@ -190,6 +227,40 @@ repo_relative_to_display_path() {
   printf '~/%s\n' "$home_relative_path"
 }
 
+fix_repo_item_permissions() {
+  local repo_relative_path="$1"
+  local repo_file_path="$2"
+  local home_relative_path
+
+  if ! home_relative_path=$(repo_relative_to_home_relative "$repo_relative_path" 2>/dev/null); then
+    return
+  fi
+
+  case "$home_relative_path" in
+    .ssh|.ssh/*)
+      if [[ -d "$repo_file_path" ]]; then
+        chmod 700 "$repo_file_path" 2>/dev/null || true
+        find "$repo_file_path" -maxdepth 1 -type f -name 'id_*' ! -name '*.pub' -exec chmod 600 {} + 2>/dev/null || true
+        find "$repo_file_path" -maxdepth 1 -type f -name '*.pub' -exec chmod 644 {} + 2>/dev/null || true
+        [[ -f "$repo_file_path/config" ]] && chmod 600 "$repo_file_path/config" 2>/dev/null || true
+      elif [[ -f "$repo_file_path" ]]; then
+        chmod 700 "$(dirname "$repo_file_path")" 2>/dev/null || true
+        case "$(basename "$repo_file_path")" in
+          *.pub)
+            chmod 644 "$repo_file_path" 2>/dev/null || true
+            ;;
+          id_*)
+            chmod 600 "$repo_file_path" 2>/dev/null || true
+            ;;
+          config)
+            chmod 600 "$repo_file_path" 2>/dev/null || true
+            ;;
+        esac
+      fi
+      ;;
+  esac
+}
+
 load_manifest() {
   local manifest_path="$REPO_PATH/$MANIFEST_FILE"
   if [[ ! -f "$manifest_path" ]]; then
@@ -283,21 +354,13 @@ PY
 }
 
 cmd_init() {
-  if [[ $# -lt 1 ]]; then
-    print_init_usage
-    echo ""
-    echo "Examples:"
-    echo "  ghsync init git@github.com:user/dotfiles.git"
-    echo "  ghsync init git@github.com:user/dotfiles.git dotfiles"
-    echo "  ghsync init git@github.com:user/dotfiles.git --repo-subdir '~'"
-    echo "  ghsync init https://github.com/user/dotfiles TOKEN --repo-subdir dotfiles"
-    exit 1
-  fi
-
-  local repo_url="$1"
-  shift
+  local repo_url=""
   local token=""
   local repo_subdir="."
+  local repo_dir="$DEFAULT_REPO_PATH"
+  local repo_dir_specified=""
+  local repo_url_inferred=""
+  local positionals=()
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -313,21 +376,68 @@ cmd_init() {
         repo_subdir="${1#*=}"
         shift
         ;;
-      *)
-        if [[ -z "$token" ]] && [[ $# -eq 1 ]] && [[ "$repo_url" != https://* ]]; then
-          repo_subdir="$1"
-        elif [[ -z "$token" ]]; then
-          token="$1"
-        elif [[ "$repo_subdir" == "." ]]; then
-          repo_subdir="$1"
-        else
-          print_init_usage
+      --repo-dir)
+        if [[ $# -lt 2 ]]; then
+          echo "Error: --repo-dir requires a value"
           exit 1
         fi
+        repo_dir="$2"
+        repo_dir_specified="1"
+        shift 2
+        ;;
+      --repo-dir=*)
+        repo_dir="${1#*=}"
+        repo_dir_specified="1"
+        shift
+        ;;
+      *)
+        positionals+=("$1")
         shift
         ;;
     esac
   done
+
+  if [[ ${#positionals[@]} -gt 0 ]]; then
+    repo_url="${positionals[0]}"
+    if [[ ${#positionals[@]} -gt 1 ]]; then
+      local extra_args=("${positionals[@]:1}")
+      local arg
+      local i
+      local remaining
+      for ((i=0; i<${#extra_args[@]}; i++)); do
+        arg="${extra_args[$i]}"
+        remaining=$(( ${#extra_args[@]} - i ))
+        if [[ -z "$token" ]] && [[ $remaining -eq 1 ]] && [[ "$repo_url" != https://* ]]; then
+          repo_subdir="$arg"
+        elif [[ -z "$token" ]]; then
+          token="$arg"
+        elif [[ "$repo_subdir" == "." ]]; then
+          repo_subdir="$arg"
+        else
+          print_init_usage
+          exit 1
+        fi
+      done
+    fi
+  fi
+
+  repo_dir=$(normalize_repo_dir "$repo_dir")
+  REPO_PATH="$repo_dir"
+
+  if [[ -z "$repo_url" ]]; then
+    if [[ -n "$repo_dir_specified" ]] && is_git_repo "$repo_dir"; then
+      repo_url=$(git -C "$repo_dir" remote get-url origin 2>/dev/null || printf '%s' "$repo_dir")
+      repo_url_inferred="1"
+    else
+      print_init_usage
+      echo ""
+      echo "Examples:"
+      echo "  ghsync init git@github.com:user/dotfiles.git"
+      echo "  ghsync init git@github.com:user/dotfiles.git --repo-dir ~/code/dotfiles"
+      echo "  ghsync init --repo-dir ~/code/dotfiles"
+      exit 1
+    fi
+  fi
 
   if ! repo_subdir=$(normalize_repo_subdir "$repo_subdir"); then
     exit 1
@@ -335,18 +445,36 @@ cmd_init() {
 
   ensure_config_dir
 
+  if [[ -e "$repo_dir" ]] && [[ ! -d "$repo_dir" ]]; then
+    echo "Error: repo-dir is not a directory: $repo_dir"
+    exit 1
+  fi
+
+  if is_git_repo "$repo_dir" && [[ -n "$repo_dir_specified" || -n "$repo_url_inferred" ]]; then
+    save_config "$repo_url" "$token" "$repo_subdir" "$repo_dir"
+    echo "Repository initialized"
+    echo "Repo subdir: $repo_subdir"
+    echo "Repo dir: $repo_dir"
+    do_restore
+    return
+  fi
+
+  if [[ -n "$repo_dir_specified" ]] && [[ -d "$repo_dir" ]] && [[ -n $(find "$repo_dir" -mindepth 1 -maxdepth 1 2>/dev/null | head -n 1) ]]; then
+    echo "Error: repo-dir exists but is not a git repository: $repo_dir"
+    exit 1
+  fi
+
   local clone_url="$repo_url"
-  local temp_repo_path="$CONFIG_DIR/repo.tmp.$$"
-  local backup_repo_path="$CONFIG_DIR/repo.backup.$$"
+  local temp_repo_path="${repo_dir}.tmp.$$"
+  local backup_repo_path="${repo_dir}.backup.$$"
 
   rm -rf "$temp_repo_path" "$backup_repo_path"
+  mkdir -p "$(dirname "$repo_dir")"
 
   # Handle different URL formats
   if [[ "$repo_url" == git@* ]]; then
-    # SSH URL (git@github.com:user/repo.git) - no token needed
     clone_url="$repo_url"
   elif [[ "$repo_url" == https://* ]] && [[ -n "$token" ]]; then
-    # HTTPS with token
     clone_url="${repo_url/https:\/\//https:\/\/$token@}"
   fi
 
@@ -356,14 +484,14 @@ cmd_init() {
     exit 1
   fi
 
-  if [[ -d "$REPO_PATH" ]]; then
-    mv "$REPO_PATH" "$backup_repo_path"
+  if [[ -e "$repo_dir" ]]; then
+    mv "$repo_dir" "$backup_repo_path"
   fi
 
-  if ! mv "$temp_repo_path" "$REPO_PATH"; then
+  if ! mv "$temp_repo_path" "$repo_dir"; then
     rm -rf "$temp_repo_path"
-    if [[ -d "$backup_repo_path" ]]; then
-      mv "$backup_repo_path" "$REPO_PATH"
+    if [[ -e "$backup_repo_path" ]]; then
+      mv "$backup_repo_path" "$repo_dir"
     fi
     echo "Error: Failed to activate cloned repository"
     exit 1
@@ -371,11 +499,11 @@ cmd_init() {
 
   rm -rf "$backup_repo_path"
 
-  save_config "$repo_url" "$token" "$repo_subdir"
+  save_config "$repo_url" "$token" "$repo_subdir" "$repo_dir"
   echo "Repository initialized"
   echo "Repo subdir: $repo_subdir"
+  echo "Repo dir: $repo_dir"
 
-  # Restore symlinks for all tracked items
   do_restore
 }
 
@@ -425,6 +553,7 @@ cmd_save() {
     cp -rL "$file_path" "$repo_file_path"
 
     add_to_manifest "$repo_relative_path"
+    fix_repo_item_permissions "$repo_relative_path" "$repo_file_path"
 
     cd "$REPO_PATH"
     git add .
@@ -444,6 +573,7 @@ cmd_save() {
   cp -L "$file_path" "$repo_file_path"
 
   add_to_manifest "$repo_relative_path"
+  fix_repo_item_permissions "$repo_relative_path" "$repo_file_path"
 
   cd "$REPO_PATH"
   git add .
@@ -453,7 +583,7 @@ cmd_save() {
   if [[ -L "$file_path" ]]; then
     local link_target
     link_target=$(readlink "$file_path")
-    if [[ "$link_target" == "$repo_file_path" ]] || [[ "$link_target" == *".ghsync/repo/"* ]]; then
+    if [[ "$link_target" == "$repo_file_path" ]]; then
       echo "Already symlinked: $(repo_relative_to_display_path "$repo_relative_path" 2>/dev/null || echo "$repo_relative_path")"
       return
     fi
@@ -568,6 +698,7 @@ restore_item() {
   fi
 
   mkdir -p "$(dirname "$target_path")"
+  fix_repo_item_permissions "$repo_relative_path" "$repo_file_path"
 
   if [[ -e "$target_path" || -L "$target_path" ]]; then
     if [[ -L "$target_path" ]]; then
@@ -704,7 +835,7 @@ case "$1" in
     echo "GitHub File Sync with Symlinks"
     echo ""
     echo "Commands:"
-    echo "  init <repo-url> [token] [repo-subdir]  Initialize and restore symlinks"
+    echo "  init <repo-url> [token] [repo-subdir] [--repo-dir <dir>]  Initialize and restore symlinks"
     echo "  save <path>                            Save file or directory to repo and create symlink"
     echo "  remove <path>                          Stop tracking and restore original"
     echo "  sync                                   Push/pull changes and restore new symlinks"
@@ -714,6 +845,8 @@ case "$1" in
     echo ""
     echo "Examples:"
     echo "  ghsync init git@github.com:user/dotfiles.git"
+    echo "  ghsync init git@github.com:user/dotfiles.git --repo-dir ~/code/dotfiles"
+    echo "  ghsync init --repo-dir ~/code/dotfiles"
     echo "  ghsync init git@github.com:user/dotfiles.git dotfiles"
     echo "  ghsync init git@github.com:user/dotfiles.git --repo-subdir '~'"
     echo "  ghsync init https://github.com/user/dotfiles TOKEN --repo-subdir dotfiles"

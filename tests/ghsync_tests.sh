@@ -76,6 +76,7 @@ test_init_creates_repo_and_config() {
   [[ -f "$HOME/.ghsync/config" ]] || fail "config file missing"
   grep -q "REPO_URL=\"$REMOTE_REPO\"" "$HOME/.ghsync/config" || fail "config missing repo url"
   grep -q 'REPO_SUBDIR="."' "$HOME/.ghsync/config" || fail "config missing default repo subdir"
+  grep -q "REPO_DIR=\"$HOME/.ghsync/repo\"" "$HOME/.ghsync/config" || fail "config missing default repo dir"
   [[ -f "$HOME/.ghsync/repo/manifest.json" ]] || fail "manifest missing"
 }
 
@@ -84,6 +85,45 @@ test_init_accepts_custom_repo_subdir() {
   ghsync init "$REMOTE_REPO" dotfiles >/dev/null
 
   grep -q 'REPO_SUBDIR="dotfiles"' "$HOME/.ghsync/config" || fail "config missing custom repo subdir"
+}
+
+test_init_attaches_existing_repo_dir() {
+  setup_seed_repo
+  local attached="$TMP_ROOT/dotfiles"
+  git clone "$REMOTE_REPO" "$attached" >/dev/null
+  git -C "$attached" config user.name "Test User" >/dev/null
+  git -C "$attached" config user.email "test@example.com" >/dev/null
+  echo '{".bashrc":".bashrc"}' > "$attached/manifest.json"
+  echo 'hello' > "$attached/.bashrc"
+
+  ghsync init --repo-dir "$attached" >/dev/null
+
+  grep -q "REPO_URL=\"$REMOTE_REPO\"" "$HOME/.ghsync/config" || fail "config missing inferred repo url"
+  grep -q "REPO_DIR=\"$attached\"" "$HOME/.ghsync/config" || fail "config missing attached repo dir"
+  [[ -L "$HOME/.bashrc" ]] || fail "bashrc not restored from attached repo"
+  local target
+  target=$(readlink "$HOME/.bashrc")
+  [[ "$target" == "$attached/.bashrc" ]] || fail "bashrc symlink target wrong for attached repo"
+}
+
+test_init_attached_repo_dir_fixes_ssh_permissions() {
+  setup_seed_repo
+  local attached="$TMP_ROOT/dotfiles"
+  git clone "$REMOTE_REPO" "$attached" >/dev/null
+  git -C "$attached" config user.name "Test User" >/dev/null
+  git -C "$attached" config user.email "test@example.com" >/dev/null
+  mkdir -p "$attached/.ssh"
+  echo 'private-key' > "$attached/.ssh/id_ed25519"
+  echo '{".ssh":".ssh"}' > "$attached/manifest.json"
+  chmod 755 "$attached/.ssh"
+  chmod 644 "$attached/.ssh/id_ed25519"
+
+  ghsync init --repo-dir "$attached" >/dev/null
+
+  [[ -L "$HOME/.ssh" ]] || fail "ssh dir not restored from attached repo"
+  [[ "$(readlink "$HOME/.ssh")" == "$attached/.ssh" ]] || fail "ssh symlink target wrong for attached repo"
+  [[ "$(stat -c '%a' "$attached/.ssh")" == "700" ]] || fail "attached ssh dir permissions not fixed"
+  [[ "$(stat -c '%a' "$attached/.ssh/id_ed25519")" == "600" ]] || fail "attached ssh key permissions not fixed"
 }
 
 test_init_failure_preserves_existing_repo() {
@@ -131,6 +171,26 @@ test_save_with_custom_repo_subdir_uses_existing_layout() {
   [[ "$target" == "$HOME/.ghsync/repo/dotfiles/.bashrc" ]] || fail "bashrc symlink target wrong for custom repo subdir"
   [[ "$(cat "$HOME/.ghsync/repo/dotfiles/.bashrc")" == "hello" ]] || fail "custom subdir copy missing content"
   grep -q '"dotfiles/.bashrc"' "$HOME/.ghsync/repo/manifest.json" || fail "manifest missing custom subdir entry"
+}
+
+test_save_uses_attached_repo_dir() {
+  setup_seed_repo
+  local attached="$TMP_ROOT/dotfiles"
+  git clone "$REMOTE_REPO" "$attached" >/dev/null
+  git -C "$attached" config user.name "Test User" >/dev/null
+  git -C "$attached" config user.email "test@example.com" >/dev/null
+
+  ghsync init --repo-dir "$attached" >/dev/null
+
+  echo "hello" > "$HOME/.bashrc"
+  ghsync save "$HOME/.bashrc" >/dev/null
+
+  [[ -L "$HOME/.bashrc" ]] || fail "bashrc not symlinked for attached repo"
+  local target
+  target=$(readlink "$HOME/.bashrc")
+  [[ "$target" == "$attached/.bashrc" ]] || fail "bashrc symlink target wrong for attached repo"
+  [[ "$(cat "$attached/.bashrc")" == "hello" ]] || fail "attached repo copy missing content"
+  grep -q '".bashrc"' "$attached/manifest.json" || fail "attached repo manifest missing entry"
 }
 
 test_sync_restores_new_remote_symlink() {
@@ -265,9 +325,12 @@ test_list_outputs_tracked_files() {
 main() {
   run_test test_init_creates_repo_and_config
   run_test test_init_accepts_custom_repo_subdir
+  run_test test_init_attaches_existing_repo_dir
+  run_test test_init_attached_repo_dir_fixes_ssh_permissions
   run_test test_init_failure_preserves_existing_repo
   run_test test_save_creates_symlink_and_manifest_entry
   run_test test_save_with_custom_repo_subdir_uses_existing_layout
+  run_test test_save_uses_attached_repo_dir
   run_test test_sync_restores_new_remote_symlink
   run_test test_legacy_layout_is_auto_detected_without_repo_subdir_config
   run_test test_restore_recreates_missing_symlink
