@@ -193,6 +193,51 @@ test_save_uses_attached_repo_dir() {
   grep -q '".bashrc"' "$attached/manifest.json" || fail "attached repo manifest missing entry"
 }
 
+test_save_secret_uses_chezmoi_encryption() {
+  setup_seed_repo
+  local fake_bin="$TMP_ROOT/bin"
+  mkdir -p "$fake_bin"
+  cat > "$fake_bin/chezmoi" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+source_dir=""
+if [[ "${1:-}" == "--source" ]]; then
+  source_dir="$2"
+  shift 2
+fi
+case "${1:-}" in
+  add)
+    [[ "${2:-}" == "--encrypt" ]] || exit 2
+    file="$3"
+    rel="${file#$HOME/}"
+    dir="$source_dir/$(dirname "$rel")"
+    mkdir -p "$dir"
+    printf 'encrypted:%s\n' "$(cat "$file")" > "$dir/encrypted_private_$(basename "$rel").age"
+    ;;
+  apply)
+    mkdir -p "$HOME"
+    echo applied > "$HOME/.chezmoi-applied"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+  chmod +x "$fake_bin/chezmoi"
+  PATH="$fake_bin:$PATH" ghsync init "$REMOTE_REPO" >/dev/null
+  configure_repo_user
+
+  mkdir -p "$HOME/.ssh"
+  echo "private-key" > "$HOME/.ssh/id_ed25519"
+  PATH="$fake_bin:$PATH" ghsync save "$HOME/.ssh/id_ed25519" >/dev/null
+
+  [[ ! -L "$HOME/.ssh/id_ed25519" ]] || fail "encrypted secret should not be symlinked"
+  [[ -f "$HOME/.ghsync/repo/.chezmoi/.ssh/encrypted_private_id_ed25519.age" ]] || fail "encrypted chezmoi source missing"
+  grep -q 'encrypted:private-key' "$HOME/.ghsync/repo/.chezmoi/.ssh/encrypted_private_id_ed25519.age" || fail "fake encrypted content missing"
+  ! grep -q '".ssh/id_ed25519"' "$HOME/.ghsync/repo/manifest.json" || fail "encrypted secret should not be in symlink manifest"
+  grep -qx '.ssh/id_ed25519' "$HOME/.ghsync/repo/.ghsync-encrypted" || fail "encrypted manifest missing secret"
+}
+
 test_sync_restores_new_remote_symlink() {
   setup_seed_repo
   "$GHSYNC_BIN" init "$REMOTE_REPO" >/dev/null
@@ -331,6 +376,7 @@ main() {
   run_test test_save_creates_symlink_and_manifest_entry
   run_test test_save_with_custom_repo_subdir_uses_existing_layout
   run_test test_save_uses_attached_repo_dir
+  run_test test_save_secret_uses_chezmoi_encryption
   run_test test_sync_restores_new_remote_symlink
   run_test test_legacy_layout_is_auto_detected_without_repo_subdir_config
   run_test test_restore_recreates_missing_symlink

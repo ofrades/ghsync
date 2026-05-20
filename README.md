@@ -25,6 +25,9 @@ ghsync init git@github.com:user/dotfiles.git dotfiles
 ghsync save ~/.bashrc
 ghsync save ~/.config/nvim
 
+# Secrets such as ~/.ssh/id_* are encrypted automatically with chezmoi
+ghsync save ~/.ssh/id_ed25519
+
 # Push changes to remote
 ghsync sync
 ```
@@ -34,21 +37,57 @@ ghsync sync
 | Command | Description |
 |---------|-------------|
 | `ghsync init <repo> [token] [repo-subdir] [--repo-dir <dir>]` | Initialize and restore symlinks. `repo-subdir` maps the repo to `$HOME`; `--repo-dir` uses an existing local checkout instead of `~/.ghsync/repo`. |
-| `ghsync save <path>` | Save file or directory to repo and create symlink |
+| `ghsync save [--encrypt\|--no-encrypt] <path>` | Save file or directory. Secret paths are encrypted with chezmoi instead of symlinked |
 | `ghsync remove <path>` | Stop tracking and restore original |
 | `ghsync sync` | Push/pull changes and restore new symlinks |
 | `ghsync status` | Show local changes and remote sync status |
 | `ghsync restore` | Manually restore all symlinks |
 | `ghsync list` | List all tracked files and directories |
+| `ghsync setup-encryption [key-file]` | Configure chezmoi age encryption for encrypted secrets |
 
 ## How It Works
 
 1. `save` copies a file/directory into your configured repo subdir and replaces the original with a symlink
-2. `sync` pushes your commits, pulls remote changes, and restores any new symlinks
-3. `init` either clones the repo or attaches to an existing local checkout, then restores all symlinks
-4. `remove` restores the original file/directory and stops tracking
+2. Secret paths are saved through chezmoi as encrypted source files under `.chezmoi/` and are restored as real files, not symlinks
+3. `sync` pushes your commits, pulls remote changes, and restores any new symlinks and encrypted secrets
+4. `init` either clones the repo or attaches to an existing local checkout, then restores all symlinks and encrypted secrets
+5. `remove` restores the original file/directory and stops tracking
 
 ## Setup
+
+### First machine with encrypted secrets
+
+```bash
+# Install and initialize ghsync
+ghsync init git@github.com:user/dotfiles.git --repo-dir ~/code/dotfiles
+
+# Configure chezmoi age encryption. This creates ~/.config/chezmoi/key.txt
+ghsync setup-encryption
+
+# Save normal public config as symlinks
+ghsync save ~/.bashrc
+
+# Save secrets as encrypted source in the repo, while keeping plaintext locally
+ghsync save --encrypt ~/.bash_secrets
+ghsync sync
+```
+
+Back up `~/.config/chezmoi/key.txt` somewhere safe. It is your decryption key and should not be committed to the dotfiles repo.
+
+### New machine / decrypting encrypted secrets
+
+```bash
+# Restore your backed-up decryption key first
+mkdir -p ~/.config/chezmoi
+cp /secure/backup/key.txt ~/.config/chezmoi/key.txt
+chmod 600 ~/.config/chezmoi/key.txt
+
+# Configure chezmoi to use that key, then initialize ghsync
+ghsync setup-encryption
+ghsync init git@github.com:user/dotfiles.git
+```
+
+`ghsync init`, `ghsync sync`, and `ghsync restore` run `chezmoi apply`, so encrypted files from `<repo>/.chezmoi/` are decrypted into normal plaintext files in your home directory.
 
 ### Initialize with SSH (recommended)
 
@@ -170,11 +209,58 @@ If you initialize with a custom repo subdir like `dotfiles`, files are stored th
 
 Legacy repos with a literal `~/` folder are still supported for compatibility, but new setups no longer need that extra directory.
 
+## Encrypted secrets with chezmoi
+
+`ghsync save` automatically encrypts common secret paths when `chezmoi` is installed and configured with encryption (age or gpg). Built-in secret patterns include SSH private keys, `.gnupg`, `.netrc`, AWS credentials, GitHub CLI hosts, and kubeconfig. It also scans shell env files such as `.bashrc`, `.profile`, `.zshrc`, and `.env` for secret-looking assignments like `export API_TOKEN=...` or `PASSWORD=...`; for these mixed config files, ghsync refuses the save and asks you to move secrets into a separate encrypted file unless you explicitly use `--encrypt`.
+
+```bash
+# Uses chezmoi add --encrypt and stores encrypted source state in <repo>/.chezmoi/
+ghsync save ~/.ssh/id_ed25519
+
+# Force encryption for any path
+ghsync save --encrypt ~/.config/myapp/secret.yml
+
+# Recommended for shell secrets: source an encrypted sidecar file from .bashrc
+echo '[[ -f "$HOME/.bash_secrets" ]] && source "$HOME/.bash_secrets"' >> ~/.bashrc
+ghsync save --no-encrypt ~/.bashrc
+ghsync save --encrypt ~/.bash_secrets
+
+# Bypass automatic encryption if needed
+ghsync save --no-encrypt ~/.ssh/config
+```
+
+Add repo-specific glob patterns to `.ghsync-secrets` (one pattern per line, `#` comments allowed), for example:
+
+```text
+.config/myapp/*secret*
+.env
+```
+
+Encrypted files are tracked in `.ghsync-encrypted`, refreshed with `chezmoi add --encrypt` during `ghsync sync`, and restored by `ghsync init`, `ghsync sync`, and `ghsync restore` via `chezmoi --source <repo>/.chezmoi apply`.
+
+### Secret encryption setup
+
+For encrypted secrets, install `chezmoi` plus `age-keygen`, then let ghsync write the chezmoi age config:
+
+```bash
+# Install chezmoi locally
+sh -c "$(curl -fsLS get.chezmoi.io)" -- -b ~/.local/bin
+
+# Install age/age-keygen with your package manager, or from https://github.com/FiloSottile/age
+
+# Create ~/.config/chezmoi/key.txt if missing and configure ~/.config/chezmoi/chezmoi.toml
+ghsync setup-encryption
+```
+
+Back up `~/.config/chezmoi/key.txt` somewhere safe. Without it, other machines cannot decrypt your secrets. On a new machine, restore that key first, then run `ghsync setup-encryption` again to recreate the local chezmoi config.
+
 ## Requirements
 
 - `bash`
 - `git`
 - Optional: `jq` (falls back to `python3` if available)
+- Optional for encrypted secrets: `chezmoi`
+- Optional for age-backed encryption: `age` / `age-keygen`
 
 ## Testing
 
